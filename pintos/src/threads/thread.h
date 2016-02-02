@@ -116,6 +116,18 @@ struct thread
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
 
+bool prior_more(const struct list_elem *a,
+                        const struct list_elem *b,
+                        void *aux);
+                        
+bool donate_more(const struct list_elem *a,
+                        const struct list_elem *b,
+                        void *aux);
+
+void thread_check_ready(void);
+
+void unlist_waiting( struct lock * tempL);
+
 void thread_init (void);
 void thread_start (void);
 
@@ -139,8 +151,8 @@ void thread_yield (void);
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
 
-void thread_donate ();
-void thread_revert ();
+void thread_donate (void);
+void thread_revert (void);
 
 int thread_get_priority (void);
 void thread_set_priority (int);

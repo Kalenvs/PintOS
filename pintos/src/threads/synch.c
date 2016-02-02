@@ -134,8 +134,7 @@ sema_up (struct semaphore *sema)
   {   
 	list_sort(&sema->waiters, &sema_more,NULL);  
     t = list_entry (list_pop_front (&sema->waiters), struct thread, elem);
-    thread_unblock(t);
-    //list_remove(&t->donation_elem);                             
+    thread_unblock(t);                          
   }
   
   sema->value++;
@@ -143,7 +142,6 @@ sema_up (struct semaphore *sema)
 }
 
 static void sema_test_helper (void *sema_);
-
 /* Self-test for semaphores that makes control "ping-pong"
    between a pair of threads.  Insert calls to printf() to see
    what's going on. */
@@ -219,9 +217,10 @@ lock_acquire (struct lock *lock)
   ASSERT (!lock_held_by_current_thread (lock));
   struct thread * t = thread_current();
   enum intr_level old_level = intr_disable();
-  t->waiting_on = lock;  
+   
   if(lock->holder)
   {
+	t->waiting_on = lock; 
 	list_push_front(&lock->holder->donation_list, &t->donation_elem);
   }
   sema_down (&lock->semaphore);
@@ -269,11 +268,13 @@ lock_release (struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
   
   enum intr_level old_level = intr_disable();
-   
+  
+  unlist_waiting(lock);
   sema_up (&lock->semaphore);
   lock->holder = NULL;
   
   intr_set_level(old_level);
+  
   thread_revert(); 
 }
 
@@ -337,7 +338,8 @@ cond_wait (struct condition *cond, struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
   
   sema_init (&waiter.semaphore, 0);
-  list_insert_ordered (&cond->waiters, &waiter.elem, &sema_more, NULL);
+  list_push_front (&cond->waiters, &waiter.elem);
+  //list_insert_ordered (&cond->waiters, &waiter.elem, &sema_more, NULL);
   lock_release (lock);
   sema_down (&waiter.semaphore);
   lock_acquire (lock);

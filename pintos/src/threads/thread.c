@@ -118,6 +118,23 @@ void thread_check_ready()
 	
 }
 
+void unlist_waiting( struct lock * tempL)
+{
+	struct list_elem * curE = list_begin(&tempL->holder->donation_list);
+	struct list_elem * tempE;
+	struct thread * t;
+	
+	while( curE != list_end(&tempL->holder->donation_list))
+	{
+		t = list_entry(curE, struct thread, donation_elem);
+		tempE = list_next(curE);
+		
+		if(t->waiting_on == tempL)
+			list_remove(curE);
+		curE=tempE;
+	}
+}
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -156,7 +173,6 @@ thread_start (void)
   struct semaphore idle_started;
   sema_init (&idle_started, 0);
   thread_create ("idle", PRI_MIN, idle, &idle_started);
-  //printf("!\n");
   /* Start preemptive thread scheduling. */
   intr_enable ();
 
@@ -417,26 +433,23 @@ thread_donate ()
 /*checks if thread has been donated to, then reverts to original priority */
 void
 thread_revert ()
-{
-	struct list tempList;
-	list_init(&tempList);
-	
+{	
 	struct thread * tempT,*t;
 	struct list_elem * tempE;
 	t = thread_current();
+	t->priority = t->original_priority;
+	
 	if(!list_empty(&t->donation_list))
 	{
-		//tempE = list_max(&t->donation_list, &donate_more, NULL);
-		//tempT = list_entry(tempE, struct thread, donation_elem);
-		/*if( tempT->priority > t->priority)
+		tempE = list_max(&t->donation_list, &donate_more, NULL);
+		tempT = list_entry(tempE, struct thread, donation_elem);
+		
+		if( tempT->priority > t->priority)
 		{
 			t->priority = tempT->priority;
-			thread_check_ready();
-			return;
-		}*/
-		
+		}
 	}
-    t->priority = t->original_priority;
+	
 	thread_check_ready();
 }
 
@@ -447,7 +460,10 @@ thread_set_priority (int new_priority)
   struct thread * t = thread_current ();
   enum intr_level old_level = intr_disable ();
   
-  t->priority = new_priority;
+  if(t->priority < new_priority)
+	t->priority = new_priority;
+	
+  t->original_priority = new_priority;
   
   intr_set_level (old_level);
   thread_check_ready();

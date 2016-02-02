@@ -12,6 +12,11 @@ struct semaphore
   };
 
 void sema_init (struct semaphore *, unsigned value);
+
+bool sema_more(const struct list_elem *a,
+                        const struct list_elem *b,
+                        void *aux);
+
 void sema_down (struct semaphore *);
 bool sema_try_down (struct semaphore *);
 void sema_up (struct semaphore *);
