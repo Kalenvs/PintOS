@@ -457,13 +457,26 @@ thread_revert ()
 void
 thread_set_priority (int new_priority) 
 {
+  struct thread * tempT;
+  struct list_elem * tempE;
+  
   struct thread * t = thread_current ();
   enum intr_level old_level = intr_disable ();
   
-  if(t->priority < new_priority)
-	t->priority = new_priority;
-	
   t->original_priority = new_priority;
+  
+  if(list_empty(&t->donation_list))
+  {
+	t->priority = new_priority;
+  }
+  else
+  {
+	  tempE = list_max(&t->donation_list, &donate_more, NULL);
+	  tempT = list_entry(tempE, struct thread, donation_elem);
+	  
+	  if(tempT->priority < new_priority)
+		t->priority = new_priority;
+  }
   
   intr_set_level (old_level);
   thread_check_ready();
