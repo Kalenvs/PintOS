@@ -18,8 +18,6 @@
 #endif
 
 /* Number of timer ticks since OS booted. */
-/* List of processes in waiting state, and is sleeping */
-static struct list sleep_list;
 static int64_t ticks;
 
 /* Number of loops per timer tick.
@@ -39,28 +37,7 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
-  list_init (&sleep_list);
 }
-
-
-bool sleep_less(const struct list_elem *a,
-                        const struct list_elem *b,
-                        void *aux)
-{
-	struct thread * aT = list_entry(a , struct thread , sleep_elem );
-	struct thread * bT = list_entry(b , struct thread , sleep_elem );
-	if(aT->endSleep > bT->endSleep)
-		return false;
-	else if ( aT->endSleep == bT->endSleep )
-	{
-		if(aT->priority >= bT->priority)
-			return false;
-		else
-			return true;
-	}
-	else
-		return true;
-};
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
 void
@@ -112,24 +89,11 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t timeDone = timer_ticks () + ticks;
+  int64_t start = timer_ticks ();
 
   ASSERT (intr_get_level () == INTR_ON);
-   
-  //Blocks interrupts, sets sleep_elem to finishing time, inserts thread to sleep list, adds to wait list, 
-  //reverts interupts to old status.  
-  
-  enum intr_level old_level = intr_disable ();
-  
-  thread_current()->endSleep = timeDone;
-  list_insert_ordered(&sleep_list, &(thread_current()->sleep_elem), &sleep_less, NULL);
-  thread_block();
-  
-  thread_check_ready();
-  
-  intr_set_level (old_level);
-  
-  thread_check_ready();
+  while (timer_elapsed (start) < ticks) 
+    thread_yield ();
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -202,25 +166,12 @@ timer_print_stats (void)
   printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
 
-/* Timer interrupt handler. Put the Sleeping List check here. Moves to ready section. */
+/* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
-  bool check = true;
-  while(!list_empty(&sleep_list) && check)
-  {
-	  if(list_entry( list_front(&sleep_list) , struct thread , sleep_elem )->endSleep <= ticks )
-	  {
-		thread_unblock( list_entry(list_pop_front(&sleep_list), struct thread , sleep_elem ));
-	  }
-	  else
-		check = false;
-		
-  }
-  
-  thread_check_ready();
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

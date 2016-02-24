@@ -89,24 +89,24 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
-    struct lock * waiting_on;
-    int original_priority;
-    
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
-    
-    
-	struct list_elem sleep_elem;		/* Sleep List Element */
-	struct list donation_list;			/*List for keeping track of donations*/
-	struct list_elem donation_elem;     /* List element for donations list. */
-	int64_t endSleep;					/* Wake time variable */
-	 
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
 #endif
 
+    //stuff for part 2
+    struct list children;
+    tid_t parent;
+    
+    struct list files;
+    int fd;
+
+    struct child_process* cp;
+    
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
@@ -116,17 +116,7 @@ struct thread
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
 
-bool prior_more(const struct list_elem *a,
-                        const struct list_elem *b,
-                        void *aux);
-                        
-bool donate_more(const struct list_elem *a,
-                        const struct list_elem *b,
-                        void *aux);
-
-void thread_check_ready(void);
-
-void unlist_waiting( struct lock * tempL);
+bool thread_alive(int pid);
 
 void thread_init (void);
 void thread_start (void);
@@ -150,9 +140,6 @@ void thread_yield (void);
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
-
-void thread_donate (void);
-void thread_revert (void);
 
 int thread_get_priority (void);
 void thread_set_priority (int);

@@ -17,31 +17,43 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/syscall.h"
+#include "threads/malloc.h"
 
 static thread_func start_process NO_RETURN;
-static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static bool load (const char *cmdline,void (**eip) (void), void ** esp, char ** tokr_pntr);
+//static void * push (uint8_t *kpage, size_t *offset, const void *buf, size_t size);
+//static bool setup_stack_helper (const char * cmd_line, uint8_t * kpage, uint8_t * upage, void ** esp);
 
-/* Starts a new thread running a user program loaded from
-   FILENAME.  The new thread may be scheduled (and may even exit)
-   before process_execute() returns.  Returns the new process's
-   thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy;
+  char *cmd_line;
+  char * throw_away;
   tid_t tid;
 
-  /* Make a copy of FILE_NAME.
-     Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
-    return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  
+  //##Set exec file name here
+  cmd_line = palloc_get_page(0);
+  if(cmd_line == NULL)
+	return TID_ERROR;
+	
+  strlcpy(cmd_line, file_name, PGSIZE);
+  //##loading semaphore already initialized in thread_create
 
-  /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  
+  //change file_name to reflect actual file name
+  //##Program name is the first token of file_name
+  file_name = strtok_r(file_name, " ", &throw_away);
+	
+  /*Create a new thread to execute FILE_NAME.
+  file_name becomes thread name, cmd_line is passed as pointer arg to
+  start_process function.*/
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, cmd_line); 
+  //if the thread_create failed, free up the page at file_name
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+	palloc_free_page(cmd_line);
+	
   return tid;
 }
 
@@ -50,17 +62,27 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
-  char *file_name = file_name_;
+  char * tokr_pointer;
+  char *file_name;
   struct intr_frame if_;
   bool success;
-
+  struct thread* t;
+  
+  file_name = strtok_r(file_name_, " ", &tokr_pointer);
+  
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
-
+  success = load (file_name, &if_.eip, &if_.esp, &tokr_pointer);
+  
+  t = thread_current();
+  if(success)
+	t->cp->load = 1;
+  else
+    t->cp->load = -1;
+    
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
@@ -88,7 +110,26 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  return -1;
+	/*get process with tid from thread_list
+	if not existant, then error
+	if the child is being waited on, then error
+	 if it's waiting, busy loop
+	else continue and remove child from child list. */
+	int status;
+	struct child_process* cp = get_child(child_tid);
+	if(!cp)
+		return -1;
+	else if(cp->wait)
+		return -1;
+	cp->wait = true;
+	while(cp->exit == false)
+	{	
+		barrier();
+	}
+	
+	status = cp->status;
+	remove_child(cp);
+    return status;
 }
 
 /* Free the current process's resources. */
@@ -101,6 +142,14 @@ process_exit (void)
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
+  
+  /*sets exit status of cp struct in thread so anything waiting on it 
+  will be free */
+  if (thread_alive(cur->parent))
+    {
+      cur->cp->exit = true;
+    }
+  
   if (pd != NULL) 
     {
       /* Correct ordering here is crucial.  We must set
@@ -195,7 +244,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp,char * file_name, char ** tokr_pntr);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -206,7 +255,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *file_name, void (**eip) (void), void **esp) 
+load (const char *file_name, void (**eip) (void), void ** esp, char ** tokr_pntr) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -220,7 +269,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
-
+  
   /* Open executable file. */
   file = filesys_open (file_name);
   if (file == NULL) 
@@ -302,7 +351,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp,file_name, tokr_pntr))
     goto done;
 
   /* Start address. */
@@ -312,7 +361,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  //file close moved to process exit
   return success;
 }
 
@@ -427,7 +476,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp,char * file_name, char ** tokr_pntr) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -439,8 +488,57 @@ setup_stack (void **esp)
       if (success)
         *esp = PHYS_BASE;
       else
+      {
         palloc_free_page (kpage);
+        return success;
+	  }
     }
+    //success = setup_stack_helper(cmd_ptr, kpage, ((uint8_t *) PHYS_BASE) - PGSIZE, esp);
+  char *token;		
+  char **argv = malloc(2*sizeof(char *));		
+  int i, argc = 0, argv_size = 2;		
+  
+  // Push args onto stack		
+  for (token = file_name; token != NULL;		
+       token = strtok_r (NULL, " ", tokr_pntr))		
+    {		
+      *esp -= strlen(token) + 1;		
+      argv[argc] = *esp;		
+      argc++;		
+      // Resize argv		
+      if (argc >= argv_size)		
+	{		
+	  argv_size *= 2;		
+	  argv = realloc(argv, argv_size*sizeof(char *));		
+	}		
+      memcpy(*esp, token, strlen(token) + 1);		
+    }		
+  argv[argc] = 0;		
+  // Align to word size (4 bytes)		
+  i = (size_t) *esp % 4;		
+  if (i)		
+    {		
+      *esp -= i;		
+      memcpy(*esp, &argv[argc], i);		
+    }		
+  // Push argv[i] for all i		
+  for (i = argc; i >= 0; i--)		
+    {		
+      *esp -= sizeof(char *);		
+      memcpy(*esp, &argv[i], sizeof(char *));		
+    }
+  // Push argv		
+  token = *esp;		
+  *esp -= sizeof(char **);		
+  memcpy(*esp, &token, sizeof(char **));		
+  // Push argc		
+  *esp -= sizeof(int);		
+  memcpy(*esp, &argc, sizeof(int));		
+  // Push fake return addr		
+  *esp -= sizeof(void *);		
+  memcpy(*esp, &argv[argc], sizeof(void *));		
+  // Free argv		
+  free(argv);
   return success;
 }
 
@@ -463,3 +561,72 @@ install_page (void *upage, void *kpage, bool writable)
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
+
+//------------------------------------------------------------------------
+/*
+//## push (kpage, &ofs, &x, sizeof x), kpage is created in setup_stack....
+//## x is all the values argv, argc, and null (you need a null on the stack!)
+//## Be careful of hte order of argv! Check the stack example
+
+   Pushes the SIZE bytes in BUF onto the stack in KPAGE, whose
+   page-relative stack pointer is *OFS, and then adjusts *OFS
+   appropriately.  The bytes pushed are rounded to a 32-bit
+   boundary.
+
+   If successful, returns a pointer to the newly pushed object.
+   On failure, returns a null pointer. 
+static void *
+push (uint8_t *kpage, size_t *offset, const void *buf, size_t size) 
+{
+  size_t padsize = ROUND_UP (size, sizeof (uint32_t));
+  
+  if (*offset < padsize){
+    return NULL;
+  }
+
+  *offset -= padsize;
+  
+  memcpy (kpage + *offset + (padsize - size), buf, size);
+  
+  return kpage + *offset + (padsize - size);
+}
+
+static bool setup_stack_helper (char ** cmd_line, uint8_t * kpage, uint8_t * upage, void ** esp) 
+{
+  size_t ofs = PGSIZE; //##Used in push!
+  char * const null = NULL; //##Used for pushing nulls
+  char *ptr = (char *) cmd_line; //##strtok_r usage
+  //##Probably need some other variables here as well...
+  char ** argv = malloc(2 * sizeof(char*));
+
+  //##Parse and put in command line arguments, push each value
+  while(ptr != NULL)
+  {
+	  ptr = strtok_r(NULL, " ", cmd_line);
+	  if(!push(kpage, &ofs, ptr, sizeof(ptr))
+		return false;
+      
+  }
+  //##if any push() returns NULL, return false
+
+  //##push() a null (more precisely &null).
+  //##if push returned NULL, return false
+
+
+  //##Push argv addresses (i.e. for the cmd_line added above) in reverse order
+  //##See the stack example on documentation for what "reversed" means
+  //##Push argc, how can we determine argc?
+  //##Push &null
+  //##Should you check for NULL returns?
+
+  //##Set the stack pointer. IMPORTANT! Make sure you use the right value here...
+  *esp = upage + ofs;
+
+  //##If you made it this far, everything seems good, return true
+}
+
+
+*/
+
+
+
